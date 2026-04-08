@@ -19,7 +19,9 @@ const IS_VERCEL = Boolean(process.env.VERCEL);
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-for-development';
 
 // Connect to MongoDB
-connectDB();
+connectDB().catch((err) => {
+    console.error('MongoDB connection failed:', err);
+});
 
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
