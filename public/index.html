@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rent a Bike - Urbanspin</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .layout-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            min-height: 100vh;
+            width: 100%;
+            max-width: 1200px;
+            /* Constrain desktop width */
+            margin: 0 auto;
+            align-items: center;
+            overflow: hidden;
+            padding: 20px;
+            padding-top: 80px;
+            /* Add padding for absolute header to prevent overlap */
+        }
+
+        .hero-text {
+            padding: 20px;
+            z-index: 2;
+            text-align: left;
+            /* Align left for desktop */
+        }
+
+        .hero-title {
+            font-size: 3rem;
+            line-height: 1.1;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+        }
+
+        .hero-title span {
+            color: var(--accent);
+            display: block;
+        }
+
+        .hero-desc {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            max-width: 400px;
+            margin-bottom: 40px;
+            line-height: 1.6;
+        }
+
+        .hero-image {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .bike-img {
+            width: 100%;
+            max-width: 600px;
+            object-fit: contain;
+            filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.15));
+            transform: scale(1.1);
+            /* Slight zoom for dramatic effect */
+        }
+
+        /* Top Bar */
+        .top-bar {
+            position: absolute;
+            top: 20px;
+            right: 0;
+            left: 0;
+            padding: 0 40px;
+            /* Use padding instead of left/right for better resizing */
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 50;
+            /* Ensure high z-index to stay above everything */
+            width: 100%;
+            max-width: 1280px;
+            /* Match standard max width */
+            margin: 0 auto;
+            /* Center the bar */
+        }
+
+        .logo {
+            font-weight: 700;
+            font-size: 1.2rem;
+            letter-spacing: 1px;
+        }
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            /* Symmetric gap */
+        }
+
+        /* Icon Button Style */
+        .btn-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.2rem;
+            transition: transform 0.2s;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .btn-icon:hover {
+            transform: translateY(-2px);
+        }
+
+        /* Responsive */
+        @media (min-width: 900px) {
+            .layout-grid {
+                grid-template-columns: 1fr 1.2fr;
+                padding: 0 40px;
+            }
+
+            .hero-title {
+                font-size: 4.5rem;
+            }
+        }
+
+        @media (max-width: 899px) {
+            .layout-grid {
+                grid-template-rows: auto 1fr;
+                text-align: center;
+                padding-top: 100px;
+                /* More space on mobile */
+            }
+
+            .hero-text {
+                text-align: center;
+                order: 2;
+            }
+
+            .hero-image {
+                order: 1;
+                margin-top: 20px;
+            }
+
+            .hero-desc {
+                margin: 0 auto 30px auto;
+            }
+
+            .bike-img {
+                max-width: 80%;
+            }
+
+            .top-bar {
+                padding: 0 20px;
+            }
+        }
+
+        /* User Dropdown */
+        .user-dropdown {
+            position: absolute;
+            top: 60px;
+            right: 0;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            padding: 10px;
+            display: none;
+            min-width: 150px;
+            z-index: 100;
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: opacity 0.2s, transform 0.2s;
+        }
+
+        .user-dropdown.show {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .dropdown-item {
+            display: block;
+            width: 100%;
+            padding: 10px 15px;
+            text-align: left;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 1rem;
+            color: var(--text-primary);
+            border-radius: 8px;
+            transition: background 0.2s;
+        }
+
+        .dropdown-item:hover {
+            background-color: #f5f5f5;
+            color: var(--danger);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="top-bar">
+        <div class="logo">URBANSPIN</div>
+        <div class="nav-actions">
+            <!-- Search Icon -->
+            <button class="btn-secondary btn-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+            </button>
+
+            <!-- Login Icon (Symmetric) -->
+            <div style="position: relative;">
+                <button id="login-nav-btn" class="btn btn-icon" title="Login">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                </button>
+                <!-- Dropdown Menu -->
+                <div id="user-dropdown-menu" class="user-dropdown">
+                    <button id="logout-btn" class="dropdown-item">
+                        Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Layout -->
+    <div class="layout-grid">
+        <div class="hero-text">
+            <h1 class="hero-title">
+                RENT A <br>
+                <span>BIKE</span>
+            </h1>
+            <p class="hero-desc">
+                Experience the city like never before. Affordable, eco-friendly, and always ready when you are.
+            </p>
+            <button id="main-book-btn" class="btn" style="max-width: 250px;">
+                Find a Bike &rarr;
+            </button>
+        </div>
+
+        <div class="hero-image">
+            <img src="bicycle_cutout.png" alt="Smart Bike" class="bike-img">
+        </div>
+    </div>
+
+    <!-- Features Section -->
+    <section class="features-section">
+        <h2 class="section-title">Why Urbanspin?</h2>
+
+        <div class="features-grid">
+            <!-- Feature 1 -->
+            <div class="feature-card">
+                <div class="feature-number">01</div>
+                <h3>Smart Lock Powered by ESP32</h3>
+                <p>Our cycles are equipped with an ESP32-based electronic lock that ensures secure and controlled
+                    access. The lock only opens after successful booking and payment, and automatically locks again when
+                    your ride time expires—no manual intervention needed.</p>
+            </div>
+
+            <!-- Feature 2 -->
+            <div class="feature-card">
+                <div class="feature-number">02</div>
+                <h3>Book in Seconds</h3>
+                <p>With a simple web interface, users can choose their ride duration, see the cost instantly, and
+                    complete the booking in just a few clicks. The system handles everything—from time tracking to
+                    access control—seamlessly.</p>
+            </div>
+
+            <!-- Feature 3 -->
+            <div class="feature-card">
+                <div class="feature-number">03</div>
+                <h3>Pay Only for What You Use</h3>
+                <p>Every ride is time-controlled. Once your selected duration ends, the system automatically updates the
+                    lock status, ensuring fair usage and better availability for everyone.</p>
+            </div>
+
+            <!-- Feature 4 -->
+            <div class="feature-card">
+                <div class="feature-number">04</div>
+                <h3>Designed for Modern Mobility</h3>
+                <p>The Smart Cycle Rental System is ideal for campuses, corporate parks, and smart cities. It reduces
+                    operational costs, removes the need for manual supervision, and provides a scalable solution for
+                    shared mobility.</p>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        const loginBtn = document.getElementById('login-nav-btn');
+        const mainBookBtn = document.getElementById('main-book-btn');
+
+        function handleBookClick() {
+            const token = localStorage.getItem('token');
+            if (token) {
+                window.location.href = 'dashboard.html';
+            } else {
+                window.location.href = 'login.html';
+            }
+        }
+
+        loginBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent closing immediately
+            const token = localStorage.getItem('token');
+            if (token) {
+                // Toggle Dropdown
+                const dropdown = document.getElementById('user-dropdown-menu'); // Get dynamic ref
+                if (dropdown) dropdown.classList.toggle('show');
+            } else {
+                window.location.href = 'login.html';
+            }
+        });
+
+        // Logout Logic
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => {
+                localStorage.removeItem('user');
+                localStorage.removeItem('token');
+                // Reset UI
+                window.location.reload();
+            });
+        }
+
+        // Close dropdown when clicking outside
+        const dropdown = document.getElementById('user-dropdown-menu');
+        document.addEventListener('click', (e) => {
+            if (dropdown && !loginBtn.contains(e.target) && !dropdown.contains(e.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        // Initialize state on load
+        (function checkLoginState() {
+            const token = localStorage.getItem('token');
+            const user = localStorage.getItem('user');
+            if (token && user) {
+                loginBtn.title = `Logged in as: ${user}`;
+                loginBtn.style.color = 'var(--success)';
+            }
+        })();
+
+        mainBookBtn.addEventListener('click', handleBookClick);
+    </script>
+</body>
+
+</html>
