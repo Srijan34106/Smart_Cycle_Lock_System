@@ -284,6 +284,24 @@ app.get(['/api/version'], (req, res) => {
     });
 });
 
+app.get(['/api/cron/tick', '/cron/tick'], async (req, res) => {
+    try {
+        const cronSecret = process.env.CRON_SECRET;
+        if (cronSecret) {
+            const provided = req.get('authorization')?.replace(/^Bearer\s+/i, '') || req.query.secret;
+            if (provided !== cronSecret) {
+                return res.status(401).json({ success: false, message: 'Unauthorized' });
+            }
+        }
+
+        await reconcileRides();
+        res.json({ success: true, ranAt: new Date().toISOString() });
+    } catch (error) {
+        console.error('Cron tick error:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
 app.get(['/api/status', '/status'], authMiddleware, async (req, res) => {
     try {
         await reconcileRides();
