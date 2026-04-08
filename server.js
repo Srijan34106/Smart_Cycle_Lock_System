@@ -229,6 +229,22 @@ async function getStatusPayload(userId) {
 
 // --- API Routes ---
 
+app.use('/api', async (req, res, next) => {
+    // Allow non-DB endpoint(s) through without blocking.
+    if (req.path === '/version') return next();
+
+    try {
+        await connectDB();
+        return next();
+    } catch (err) {
+        console.error('Database not ready:', err);
+        if (err && err.code === 'MISSING_MONGODB_URI') {
+            return res.status(500).json({ success: false, message: 'Database not configured. Set MONGODB_URI in Vercel Environment Variables.' });
+        }
+        return res.status(500).json({ success: false, message: 'Database connection failed' });
+    }
+});
+
 app.post(['/api/register', '/register'], async (req, res) => {
     try {
         const { username, email, password } = req.body || {};
