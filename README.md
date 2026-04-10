@@ -51,6 +51,10 @@ Health checks:
 - `GET /api/razorpay/health`
 - `GET /api/db/health`
 
+Notes:
+
+- If you deploy to Vercel, `MONGODB_URI` must point to a hosted MongoDB instance (e.g. MongoDB Atlas). A `mongodb://localhost:27017/...` or `mongodb://127.0.0.1:27017/...` URI will fail in Vercel.
+
 ### 3) Run
 
 ```bash

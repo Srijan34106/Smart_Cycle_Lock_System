@@ -18,10 +18,12 @@ const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-for-development';
 
-// Connect to MongoDB
-connectDB().catch((err) => {
-    console.error('MongoDB connection failed:', err);
-});
+// Connect to MongoDB (eager connect only for local dev).
+if (!IS_VERCEL) {
+    connectDB().catch((err) => {
+        console.error('MongoDB connection failed:', err);
+    });
+}
 
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
@@ -240,6 +242,9 @@ app.use('/api', async (req, res, next) => {
         console.error('Database not ready:', err);
         if (err && err.code === 'MISSING_MONGODB_URI') {
             return res.status(500).json({ success: false, message: 'Database not configured. Set MONGODB_URI in Vercel Environment Variables.' });
+        }
+        if (err && err.code === 'INVALID_MONGODB_URI_LOCALHOST') {
+            return res.status(500).json({ success: false, message: 'Database misconfigured. MONGODB_URI must not point to localhost on Vercel/production.' });
         }
         return res.status(500).json({ success: false, message: 'Database connection failed' });
     }
