@@ -174,6 +174,7 @@ async function processPaymentAndStartRide(payload) {
     const {
         bookingDate,
         bookingTime,
+        bookingStartTime,
         hours,
         minutes,
         razorpay_order_id,
@@ -204,7 +205,8 @@ async function processPaymentAndStartRide(payload) {
         return { httpStatus: 400, body: { success: false, message: "Booking date is required" } };
     }
 
-    if (!bookingTime) {
+    // bookingStartTime is preferred (client-computed ISO to avoid server timezone differences)
+    if (!bookingStartTime && !bookingTime) {
         return { httpStatus: 400, body: { success: false, message: "Booking time is required" } };
     }
 
@@ -230,7 +232,14 @@ async function processPaymentAndStartRide(payload) {
         return { httpStatus: 400, body: { success: false, message: 'Booking date must be within today and the next 5 days' } };
     }
 
-    let startTimestamp = buildLocalDateTime(bookingDate, bookingTime);
+    let startTimestamp = null;
+    if (bookingStartTime) {
+        const parsed = new Date(bookingStartTime);
+        if (!Number.isNaN(parsed.getTime())) startTimestamp = parsed;
+    }
+    if (!startTimestamp) {
+        startTimestamp = buildLocalDateTime(bookingDate, bookingTime);
+    }
     if (!startTimestamp) {
         return { httpStatus: 400, body: { success: false, message: 'Invalid booking time' } };
     }
@@ -244,6 +253,13 @@ async function processPaymentAndStartRide(payload) {
 
     if (startTimestamp.getTime() <= now.getTime() && (now.getTime() - startTimestamp.getTime()) <= graceMs) {
         startTimestamp = now;
+    }
+
+    // Extra guard: enforce "within today + next 5 days" as a simple future-window.
+    // This avoids timezone-dependent edge cases on serverless (UTC) while still preventing far-future bookings.
+    const maxFutureMs = 6 * 24 * 60 * 60 * 1000; // ~6 days window (inclusive date rule)
+    if (startTimestamp.getTime() - now.getTime() > maxFutureMs) {
+        return { httpStatus: 400, body: { success: false, message: 'Booking date must be within today and the next 5 days' } };
     }
 
     const endTime = new Date(startTimestamp.getTime() + totalMinutesRaw * 60000);
@@ -523,7 +539,7 @@ app.post(['/api/cancel-booking', '/cancel-booking'], authMiddleware, async (req,
 });
 
 app.post(['/api/create-order', '/create-order'], authMiddleware, async (req, res) => {
-    const { bookingDate, bookingTime, hours, minutes } = req.body;
+    const { bookingDate, bookingTime, bookingStartTime, hours, minutes } = req.body;
 
     if (!RAZORPAY_ENABLED) {
         if (ALLOW_SIMULATED_PAYMENT) {
@@ -536,11 +552,17 @@ app.post(['/api/create-order', '/create-order'], authMiddleware, async (req, res
     }
 
     if (!bookingDate) return res.status(400).json({ success: false, message: "Booking date is required" });
-    if (!bookingTime) return res.status(400).json({ success: false, message: "Booking time is required" });
+    if (!bookingStartTime && !bookingTime) return res.status(400).json({ success: false, message: "Booking time is required" });
 
-    // Early validation for date+time format (pricing does not depend on time, but we want consistent notes)
-    const dt = buildLocalDateTime(bookingDate, bookingTime);
-    if (!dt) return res.status(400).json({ success: false, message: "Invalid booking date/time" });
+    // Early validation for date+time/startTime format (pricing does not depend on time, but we want consistent notes)
+    const parsedStart = bookingStartTime ? new Date(bookingStartTime) : null;
+    if (bookingStartTime && (Number.isNaN(parsedStart.getTime()))) {
+        return res.status(400).json({ success: false, message: "Invalid bookingStartTime" });
+    }
+    if (!bookingStartTime) {
+        const dt = buildLocalDateTime(bookingDate, bookingTime);
+        if (!dt) return res.status(400).json({ success: false, message: "Invalid booking date/time" });
+    }
 
     const totalMinutes = (parseInt(hours || 0) * 60) + parseInt(minutes || 0);
     if (totalMinutes <= 0) return res.status(400).json({ success: false, message: "Invalid duration" });
@@ -559,6 +581,7 @@ app.post(['/api/create-order', '/create-order'], authMiddleware, async (req, res
                 userId: req.user._id.toString(),
                 bookingDate: String(bookingDate),
                 bookingTime: String(bookingTime),
+                bookingStartTime: bookingStartTime ? String(bookingStartTime) : '',
                 hours: String(parseInt(hours || 0)),
                 minutes: String(parseInt(minutes || 0))
             }
@@ -614,6 +637,7 @@ async function handleRazorpayCallback(req, res) {
         const order = await razorpayInstance.orders.fetch(razorpay_order_id);
         const bookingDate = order?.notes?.bookingDate;
         const bookingTime = order?.notes?.bookingTime;
+        const bookingStartTime = order?.notes?.bookingStartTime;
         const hours = order?.notes?.hours;
         const minutes = order?.notes?.minutes;
         const userId = order?.notes?.userId;
@@ -621,6 +645,7 @@ async function handleRazorpayCallback(req, res) {
         const result = await processPaymentAndStartRide({
             bookingDate,
             bookingTime,
+            bookingStartTime,
             hours,
             minutes,
             razorpay_order_id,

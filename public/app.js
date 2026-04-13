@@ -459,6 +459,21 @@ async function initDashboard() {
             return;
         }
 
+        // Build an exact start timestamp (client local), then send as ISO.
+        const [timeHStr, timeMStr] = String(timeVal).split(':');
+        const timeH = parseInt(timeHStr, 10);
+        const timeM = parseInt(timeMStr, 10);
+        const [yStr, moStr, dStr] = String(dateVal).split('-');
+        const y = parseInt(yStr, 10);
+        const mo = parseInt(moStr, 10);
+        const d = parseInt(dStr, 10);
+        if ([timeH, timeM, y, mo, d].some((v) => Number.isNaN(v))) {
+            alert('Invalid date/time.');
+            return;
+        }
+        const startTs = new Date(y, mo - 1, d, timeH, timeM, 0, 0);
+        const bookingStartTime = startTs.toISOString();
+
         payBtn.innerText = "Initializing...";
         payBtn.disabled = true;
 
@@ -470,6 +485,7 @@ async function initDashboard() {
                 body: JSON.stringify({
                     bookingDate: dateVal,
                     bookingTime: timeVal,
+                    bookingStartTime,
                     hours: h,
                     minutes: m
                 })
