@@ -18,6 +18,9 @@ const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-for-development';
 
+// In-memory timers (only reliable for long-running servers; not for Vercel serverless)
+const rideTimers = new Map(); // rideId -> { activateTimeout, endTimeout }
+
 // Connect to MongoDB (eager connect only for local dev).
 if (!IS_VERCEL) {
     connectDB().catch((err) => {
@@ -59,9 +62,118 @@ if (RAZORPAY_ENABLED) {
 
 // --- Helper Functions ---
 
+function parseLocalDate(ymd) {
+    if (!ymd || typeof ymd !== 'string') return null;
+    const parts = ymd.split('-').map((v) => parseInt(v, 10));
+    if (parts.length !== 3) return null;
+    const [year, month, day] = parts;
+    if (!year || !month || !day) return null;
+    const dt = new Date(year, month - 1, day, 0, 0, 0, 0);
+    if (Number.isNaN(dt.getTime())) return null;
+    // Guard against JS Date overflow quirks
+    if (dt.getFullYear() !== year || dt.getMonth() !== (month - 1) || dt.getDate() !== day) return null;
+    return dt;
+}
+
+function parseTimeHHMM(hhmm) {
+    if (!hhmm || typeof hhmm !== 'string') return null;
+    const [hStr, mStr] = hhmm.split(':');
+    const hours = parseInt(hStr, 10);
+    const minutes = parseInt(mStr, 10);
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+    if (hours < 0 || hours > 23) return null;
+    if (minutes < 0 || minutes > 59) return null;
+    return { hours, minutes };
+}
+
+function buildLocalDateTime(ymd, hhmm) {
+    const d = parseLocalDate(ymd);
+    const t = parseTimeHHMM(hhmm);
+    if (!d || !t) return null;
+    d.setHours(t.hours, t.minutes, 0, 0);
+    if (Number.isNaN(d.getTime())) return null;
+    return d;
+}
+
+function clearRideTimers(rideId) {
+    const key = String(rideId);
+    const timers = rideTimers.get(key);
+    if (!timers) return;
+
+    if (timers.activateTimeout) clearTimeout(timers.activateTimeout);
+    if (timers.endTimeout) clearTimeout(timers.endTimeout);
+    rideTimers.delete(key);
+}
+
+async function activateRideNow(rideId) {
+    try {
+        await connectDB();
+        const now = new Date();
+        const ride = await Ride.findOne({ _id: rideId, status: 'scheduled' });
+        if (!ride) return;
+        if (ride.start_time <= now && ride.end_time > now) {
+            ride.status = 'active';
+            await ride.save();
+            console.log(`[RIDE] Activated (unlock) rideId=${rideId}`);
+        }
+    } catch (err) {
+        console.error('[RIDE] Activation timer failed:', err);
+    }
+}
+
+async function endRideNow(rideId) {
+    try {
+        await connectDB();
+        const now = new Date();
+        const ride = await Ride.findOne({ _id: rideId, status: 'active' });
+        if (!ride) return;
+        if (ride.end_time <= now) {
+            ride.status = 'ended';
+            await ride.save();
+            console.log(`[RIDE] Ended (auto) rideId=${rideId}`);
+        }
+    } catch (err) {
+        console.error('[RIDE] End timer failed:', err);
+    }
+}
+
+function scheduleRideTimersFor(ride) {
+    if (!ride || IS_VERCEL) return;
+
+    const rideId = String(ride._id);
+    clearRideTimers(rideId);
+
+    const now = Date.now();
+    const startMs = new Date(ride.start_time).getTime() - now;
+    const endMs = new Date(ride.end_time).getTime() - now;
+
+    const timers = { activateTimeout: null, endTimeout: null };
+
+    if (startMs > 0 && ride.status === 'scheduled') {
+        timers.activateTimeout = setTimeout(() => {
+            activateRideNow(rideId).finally(() => {
+                const existing = rideTimers.get(rideId);
+                if (existing) existing.activateTimeout = null;
+            });
+        }, startMs);
+    }
+
+    if (endMs > 0 && (ride.status === 'active' || ride.status === 'scheduled')) {
+        timers.endTimeout = setTimeout(() => {
+            endRideNow(rideId).finally(() => {
+                const existing = rideTimers.get(rideId);
+                if (existing) existing.endTimeout = null;
+            });
+        }, endMs);
+    }
+
+    rideTimers.set(rideId, timers);
+}
+
 async function processPaymentAndStartRide(payload) {
     const {
         bookingDate,
+        bookingTime,
         hours,
         minutes,
         razorpay_order_id,
@@ -92,6 +204,10 @@ async function processPaymentAndStartRide(payload) {
         return { httpStatus: 400, body: { success: false, message: "Booking date is required" } };
     }
 
+    if (!bookingTime) {
+        return { httpStatus: 400, body: { success: false, message: "Booking time is required" } };
+    }
+
     totalMinutesRaw = (parseInt(hours || 0) * 60) + parseInt(minutes || 0);
 
     if (totalMinutesRaw <= 0) {
@@ -100,32 +216,38 @@ async function processPaymentAndStartRide(payload) {
 
     expectedAmountInINR = Math.ceil(totalMinutesRaw / 30) * 100;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const selectedDate = new Date(bookingDate);
-    selectedDate.setHours(0, 0, 0, 0);
+    const todayMidnight = new Date();
+    todayMidnight.setHours(0, 0, 0, 0);
+    const selectedDateMidnight = parseLocalDate(bookingDate);
 
-    if (Number.isNaN(selectedDate.getTime())) {
+    if (!selectedDateMidnight) {
         return { httpStatus: 400, body: { success: false, message: 'Invalid booking date' } };
     }
 
-    const diffMs = selectedDate.getTime() - today.getTime();
+    const diffMs = selectedDateMidnight.getTime() - todayMidnight.getTime();
     const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
     if (diffDays < 0 || diffDays > 5) {
         return { httpStatus: 400, body: { success: false, message: 'Booking date must be within today and the next 5 days' } };
     }
 
-    let startTimestamp = new Date();
-    if (diffDays > 0) {
-        const bookingTime = new Date(bookingDate);
-        const current = new Date();
-        bookingTime.setHours(current.getHours(), current.getMinutes(), current.getSeconds(), 0);
-        startTimestamp = bookingTime;
+    let startTimestamp = buildLocalDateTime(bookingDate, bookingTime);
+    if (!startTimestamp) {
+        return { httpStatus: 400, body: { success: false, message: 'Invalid booking time' } };
+    }
+
+    // Allow a small grace window for "now" bookings (time input has no seconds)
+    const now = new Date();
+    const graceMs = 2 * 60 * 1000;
+    if (startTimestamp.getTime() < (now.getTime() - graceMs)) {
+        return { httpStatus: 400, body: { success: false, message: 'Booking time must be in the future' } };
+    }
+
+    if (startTimestamp.getTime() <= now.getTime() && (now.getTime() - startTimestamp.getTime()) <= graceMs) {
+        startTimestamp = now;
     }
 
     const endTime = new Date(startTimestamp.getTime() + totalMinutesRaw * 60000);
     const amount = expectedAmountInINR;
-    const now = new Date();
     const isFuture = startTimestamp > now;
 
     const activeExisting = await Ride.findOne({
@@ -154,6 +276,9 @@ async function processPaymentAndStartRide(payload) {
         end_time: endTime,
         amount
     });
+
+    // For long-running servers, schedule activation/end to be as precise as possible.
+    scheduleRideTimersFor(created);
 
     return {
         httpStatus: 200,
@@ -364,6 +489,7 @@ app.post(['/api/end-ride', '/end-ride'], authMiddleware, async (req, res) => {
         }
 
         console.log('Ride ended manually by user.');
+        if (updated?._id) clearRideTimers(updated._id);
         res.json({ success: true, message: 'Ride ended successfully' });
     } catch (error) {
         console.error('End-ride error:', error);
@@ -387,6 +513,8 @@ app.post(['/api/cancel-booking', '/cancel-booking'], authMiddleware, async (req,
         scheduled.status = 'canceled';
         await scheduled.save();
 
+    clearRideTimers(scheduled._id);
+
         res.json({ success: true, message: 'Scheduled booking canceled' });
     } catch (error) {
         console.error('Cancel-booking error:', error);
@@ -395,7 +523,7 @@ app.post(['/api/cancel-booking', '/cancel-booking'], authMiddleware, async (req,
 });
 
 app.post(['/api/create-order', '/create-order'], authMiddleware, async (req, res) => {
-    const { bookingDate, hours, minutes } = req.body;
+    const { bookingDate, bookingTime, hours, minutes } = req.body;
 
     if (!RAZORPAY_ENABLED) {
         if (ALLOW_SIMULATED_PAYMENT) {
@@ -408,6 +536,11 @@ app.post(['/api/create-order', '/create-order'], authMiddleware, async (req, res
     }
 
     if (!bookingDate) return res.status(400).json({ success: false, message: "Booking date is required" });
+    if (!bookingTime) return res.status(400).json({ success: false, message: "Booking time is required" });
+
+    // Early validation for date+time format (pricing does not depend on time, but we want consistent notes)
+    const dt = buildLocalDateTime(bookingDate, bookingTime);
+    if (!dt) return res.status(400).json({ success: false, message: "Invalid booking date/time" });
 
     const totalMinutes = (parseInt(hours || 0) * 60) + parseInt(minutes || 0);
     if (totalMinutes <= 0) return res.status(400).json({ success: false, message: "Invalid duration" });
@@ -425,6 +558,7 @@ app.post(['/api/create-order', '/create-order'], authMiddleware, async (req, res
             notes: {
                 userId: req.user._id.toString(),
                 bookingDate: String(bookingDate),
+                bookingTime: String(bookingTime),
                 hours: String(parseInt(hours || 0)),
                 minutes: String(parseInt(minutes || 0))
             }
@@ -479,12 +613,14 @@ async function handleRazorpayCallback(req, res) {
 
         const order = await razorpayInstance.orders.fetch(razorpay_order_id);
         const bookingDate = order?.notes?.bookingDate;
+        const bookingTime = order?.notes?.bookingTime;
         const hours = order?.notes?.hours;
         const minutes = order?.notes?.minutes;
         const userId = order?.notes?.userId;
 
         const result = await processPaymentAndStartRide({
             bookingDate,
+            bookingTime,
             hours,
             minutes,
             razorpay_order_id,
@@ -526,5 +662,22 @@ if (IS_VERCEL) {
 } else if (require.main === module) {
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`Server is running on port: ${PORT}`);
+
+        // Best-effort: schedule timers for any upcoming rides (local/long-running server only)
+        (async () => {
+            if (IS_VERCEL) return;
+            try {
+                await connectDB();
+                const now = new Date();
+                const rides = await Ride.find({
+                    status: { $in: ['scheduled', 'active'] },
+                    end_time: { $gt: now }
+                }).sort({ start_time: 1 }).limit(50);
+                rides.forEach(scheduleRideTimersFor);
+                if (rides.length) console.log(`[RIDE] Scheduled timers for ${rides.length} upcoming ride(s)`);
+            } catch (err) {
+                console.error('[RIDE] Failed to schedule upcoming rides on startup:', err);
+            }
+        })();
     });
 }

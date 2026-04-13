@@ -249,8 +249,25 @@
                 <button id="next-btn" class="btn" style="margin-top: 10px;">Next</button>
             </div>
 
-            <!-- Step 2: Duration Selection -->
+            <!-- Step 2: Time Selection -->
             <div id="booking-step-2" class="booking-step hidden">
+                <div class="icon">🕒</div>
+                <h3>Select Time</h3>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Choose when you want your ride to start.</p>
+
+                <div class="input-group">
+                    <label>Time</label>
+                    <input type="time" id="booking-time" class="date-input">
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <button id="time-back-btn" class="btn btn-secondary">Back</button>
+                    <button id="time-next-btn" class="btn">Next</button>
+                </div>
+            </div>
+
+            <!-- Step 3: Duration Selection -->
+            <div id="booking-step-3" class="booking-step hidden">
                 <div class="icon">💳</div>
                 <h3>Select Duration</h3>
                 <p style="color: var(--text-secondary); margin-bottom: 20px;">Rate: ₹100 / 30 mins</p>

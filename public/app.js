@@ -60,11 +60,15 @@ async function initDashboard() {
     // Step Elements
     const step1 = document.getElementById('booking-step-1');
     const step2 = document.getElementById('booking-step-2');
+    const step3 = document.getElementById('booking-step-3');
     const nextBtn = document.getElementById('next-btn');
+    const timeNextBtn = document.getElementById('time-next-btn');
+    const timeBackBtn = document.getElementById('time-back-btn');
     const backBtn = document.getElementById('back-btn');
 
     // Inputs
     const bookingDateInput = document.getElementById('booking-date');
+    const bookingTimeInput = document.getElementById('booking-time');
     const hoursInput = document.getElementById('hours-input');
     const minutesInput = document.getElementById('minutes-input');
 
@@ -293,18 +297,34 @@ async function initDashboard() {
     bookBtn.addEventListener('click', () => {
         modal.classList.add('active');
 
+        function toLocalYMD(d) {
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+
         // Reset to Step 1
         step1.classList.remove('hidden');
         step2.classList.add('hidden');
+        step3.classList.add('hidden');
 
         // Set Min/Max Date
         const today = new Date();
         const maxDate = new Date();
         maxDate.setDate(today.getDate() + 5);
 
-        bookingDateInput.min = today.toISOString().split('T')[0];
-        bookingDateInput.max = maxDate.toISOString().split('T')[0];
-        bookingDateInput.value = today.toISOString().split('T')[0];
+        bookingDateInput.min = toLocalYMD(today);
+        bookingDateInput.max = toLocalYMD(maxDate);
+        bookingDateInput.value = toLocalYMD(today);
+
+        // Default time = current local time (HH:MM)
+        if (bookingTimeInput) {
+            const hh = String(today.getHours()).padStart(2, '0');
+            const mm = String(today.getMinutes()).padStart(2, '0');
+            bookingTimeInput.value = `${hh}:${mm}`;
+            bookingTimeInput.min = `${hh}:${mm}`;
+        }
     });
 
     closeModal.addEventListener('click', () => {
@@ -333,14 +353,71 @@ async function initDashboard() {
             return;
         }
 
+        // Move to time selection
         step1.classList.add('hidden');
         step2.classList.remove('hidden');
+        step3.classList.add('hidden');
+
+        // If booking for today, don't allow earlier times than now
+        if (bookingTimeInput) {
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            if (selectedDate === todayStr) {
+                const hh = String(now.getHours()).padStart(2, '0');
+                const mm = String(now.getMinutes()).padStart(2, '0');
+                bookingTimeInput.min = `${hh}:${mm}`;
+            } else {
+                bookingTimeInput.min = '';
+            }
+        }
+    });
+
+    timeNextBtn.addEventListener('click', () => {
+        const dateVal = bookingDateInput.value;
+        const timeVal = bookingTimeInput?.value;
+        if (!timeVal) {
+            alert('Please select a time.');
+            return;
+        }
+
+        // Validate time not in the past (allow 2 min grace for "now")
+        const [hStr, mStr] = String(timeVal).split(':');
+        const h = parseInt(hStr, 10);
+        const m = parseInt(mStr, 10);
+        if (Number.isNaN(h) || Number.isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+            alert('Invalid time.');
+            return;
+        }
+
+        const [yStr, moStr, dStr] = String(dateVal).split('-');
+        const y = parseInt(yStr, 10);
+        const mo = parseInt(moStr, 10);
+        const d = parseInt(dStr, 10);
+        if (Number.isNaN(y) || Number.isNaN(mo) || Number.isNaN(d)) {
+            alert('Invalid date.');
+            return;
+        }
+
+        const startTs = new Date(y, mo - 1, d, h, m, 0, 0);
+        const now = new Date();
+        if (startTs.getTime() < (now.getTime() - (2 * 60 * 1000))) {
+            alert('Please select a time in the future.');
+            return;
+        }
+
+        step2.classList.add('hidden');
+        step3.classList.remove('hidden');
         calculateCost();
     });
 
-    backBtn.addEventListener('click', () => {
+    timeBackBtn.addEventListener('click', () => {
         step2.classList.add('hidden');
         step1.classList.remove('hidden');
+    });
+
+    backBtn.addEventListener('click', () => {
+        step3.classList.add('hidden');
+        step2.classList.remove('hidden');
     });
 
     // Cost Calculation
@@ -367,12 +444,18 @@ async function initDashboard() {
     // Payment Logic
     payBtn.addEventListener('click', async () => {
         const dateVal = bookingDateInput.value;
+        const timeVal = bookingTimeInput?.value;
         const h = parseInt(hoursInput.value) || 0;
         const m = parseInt(minutesInput.value) || 0;
         const totalMins = (h * 60) + m;
 
         if (totalMins <= 0) {
             alert("Please enter a valid duration");
+            return;
+        }
+
+        if (!timeVal) {
+            alert('Please select a time.');
             return;
         }
 
@@ -386,6 +469,7 @@ async function initDashboard() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     bookingDate: dateVal,
+                    bookingTime: timeVal,
                     hours: h,
                     minutes: m
                 })

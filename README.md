@@ -73,8 +73,8 @@ Open:
 Your frontend interacts with these endpoints:
 
 * `GET /api/status` - Current ride status and history
-* `POST /api/create-order` - Create Razorpay order
-* `POST /api/payment` - Verify payment and create ride
+* `POST /api/create-order` - Create Razorpay order (requires `bookingDate`, `bookingTime`, `hours`, `minutes`)
+* `POST /api/payment` - Verify payment and create ride (requires `bookingDate`, `bookingTime`, `hours`, `minutes`)
 * `POST /api/end-ride` - End an active ride manually
 * `POST /api/cancel-booking` - Cancel a scheduled booking
 * `GET /api/db/health` - Check database connectivity
