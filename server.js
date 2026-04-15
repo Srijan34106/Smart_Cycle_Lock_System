@@ -95,6 +95,20 @@ function buildLocalDateTime(ymd, hhmm) {
     return d;
 }
 
+function buildUtcDateTimeFromLocalAndOffset(ymd, hhmm, tzOffsetMinutes) {
+    // tzOffsetMinutes matches JS Date.getTimezoneOffset(): minutes to add to local time to get UTC.
+    const d = parseLocalDate(ymd);
+    const t = parseTimeHHMM(hhmm);
+    const offset = typeof tzOffsetMinutes === 'string' ? parseInt(tzOffsetMinutes, 10) : tzOffsetMinutes;
+    if (!d || !t) return null;
+    if (typeof offset !== 'number' || Number.isNaN(offset)) return null;
+
+    const utcMs = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), t.hours, t.minutes, 0, 0) + (offset * 60000);
+    const dt = new Date(utcMs);
+    if (Number.isNaN(dt.getTime())) return null;
+    return dt;
+}
+
 function clearRideTimers(rideId) {
     const key = String(rideId);
     const timers = rideTimers.get(key);
@@ -175,6 +189,7 @@ async function processPaymentAndStartRide(payload) {
         bookingDate,
         bookingTime,
         bookingStartTime,
+        tzOffsetMinutes,
         hours,
         minutes,
         razorpay_order_id,
@@ -206,7 +221,8 @@ async function processPaymentAndStartRide(payload) {
     }
 
     // bookingStartTime is preferred (client-computed ISO to avoid server timezone differences)
-    if (!bookingStartTime && !bookingTime) {
+    const normalizedBookingStartTime = (typeof bookingStartTime === 'string') ? bookingStartTime.trim() : bookingStartTime;
+    if (!normalizedBookingStartTime && !bookingTime) {
         return { httpStatus: 400, body: { success: false, message: "Booking time is required" } };
     }
 
@@ -233,12 +249,13 @@ async function processPaymentAndStartRide(payload) {
     }
 
     let startTimestamp = null;
-    if (bookingStartTime) {
-        const parsed = new Date(bookingStartTime);
+    if (normalizedBookingStartTime) {
+        const parsed = new Date(normalizedBookingStartTime);
         if (!Number.isNaN(parsed.getTime())) startTimestamp = parsed;
     }
     if (!startTimestamp) {
-        startTimestamp = buildLocalDateTime(bookingDate, bookingTime);
+        startTimestamp = buildUtcDateTimeFromLocalAndOffset(bookingDate, bookingTime, tzOffsetMinutes)
+            || buildLocalDateTime(bookingDate, bookingTime);
     }
     if (!startTimestamp) {
         return { httpStatus: 400, body: { success: false, message: 'Invalid booking time' } };
@@ -328,15 +345,23 @@ async function reconcileRides() {
 async function getStatusPayload(userId) {
     const now = new Date();
 
-    const activeRide = await Ride.findOne({
+    const activeQuery = {
         status: 'active',
         end_time: { $gt: now }
-    }).sort({ start_time: -1 });
+    };
 
-    const scheduledRide = await Ride.findOne({
+    const scheduledQuery = {
         status: 'scheduled',
         start_time: { $gt: now }
-    }).sort({ start_time: 1 });
+    };
+
+    if (userId) {
+        activeQuery.userId = userId;
+        scheduledQuery.userId = userId;
+    }
+
+    const activeRide = await Ride.findOne(activeQuery).sort({ start_time: -1 });
+    const scheduledRide = await Ride.findOne(scheduledQuery).sort({ start_time: 1 });
 
     let history = [];
     if (userId) {
@@ -539,7 +564,7 @@ app.post(['/api/cancel-booking', '/cancel-booking'], authMiddleware, async (req,
 });
 
 app.post(['/api/create-order', '/create-order'], authMiddleware, async (req, res) => {
-    const { bookingDate, bookingTime, bookingStartTime, hours, minutes } = req.body;
+    const { bookingDate, bookingTime, bookingStartTime, tzOffsetMinutes, hours, minutes } = req.body;
 
     if (!RAZORPAY_ENABLED) {
         if (ALLOW_SIMULATED_PAYMENT) {
@@ -582,6 +607,7 @@ app.post(['/api/create-order', '/create-order'], authMiddleware, async (req, res
                 bookingDate: String(bookingDate),
                 bookingTime: String(bookingTime),
                 bookingStartTime: bookingStartTime ? String(bookingStartTime) : '',
+                tzOffsetMinutes: (tzOffsetMinutes === 0 || tzOffsetMinutes) ? String(tzOffsetMinutes) : '',
                 hours: String(parseInt(hours || 0)),
                 minutes: String(parseInt(minutes || 0))
             }
@@ -638,6 +664,7 @@ async function handleRazorpayCallback(req, res) {
         const bookingDate = order?.notes?.bookingDate;
         const bookingTime = order?.notes?.bookingTime;
         const bookingStartTime = order?.notes?.bookingStartTime;
+        const tzOffsetMinutes = order?.notes?.tzOffsetMinutes;
         const hours = order?.notes?.hours;
         const minutes = order?.notes?.minutes;
         const userId = order?.notes?.userId;
@@ -646,6 +673,7 @@ async function handleRazorpayCallback(req, res) {
             bookingDate,
             bookingTime,
             bookingStartTime,
+            tzOffsetMinutes,
             hours,
             minutes,
             razorpay_order_id,

@@ -473,6 +473,7 @@ async function initDashboard() {
         }
         const startTs = new Date(y, mo - 1, d, timeH, timeM, 0, 0);
         const bookingStartTime = startTs.toISOString();
+        const tzOffsetMinutes = new Date().getTimezoneOffset();
 
         payBtn.innerText = "Initializing...";
         payBtn.disabled = true;
@@ -486,6 +487,7 @@ async function initDashboard() {
                     bookingDate: dateVal,
                     bookingTime: timeVal,
                     bookingStartTime,
+                    tzOffsetMinutes,
                     hours: h,
                     minutes: m
                 })
