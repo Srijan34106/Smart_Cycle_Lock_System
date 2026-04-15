@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const Razorpay = require('razorpay');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const mqtt = require('mqtt');
 
 const connectDB = require('./db');
 const Ride = require('./models/Ride');
@@ -17,6 +18,117 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-for-development';
+
+// --- MQTT (HiveMQ Cloud) ---
+// Configure via env vars (do not hardcode secrets):
+// - MQTT_BROKER_URL=mqtts://<host>:8883
+// - MQTT_USERNAME=...
+// - MQTT_PASSWORD=...
+// - MQTT_TOPIC=esp32/test
+const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || '';
+const MQTT_USERNAME = process.env.MQTT_USERNAME || '';
+const MQTT_PASSWORD = process.env.MQTT_PASSWORD || '';
+const MQTT_TOPIC = process.env.MQTT_TOPIC || 'esp32/test';
+
+let mqttClient = null;
+let mqttConnectPromise = null;
+
+function isMqttConfigured() {
+    return Boolean(MQTT_BROKER_URL && MQTT_USERNAME && MQTT_PASSWORD && MQTT_TOPIC);
+}
+
+function getMqttClient() {
+    if (!isMqttConfigured()) return null;
+    if (mqttClient) return mqttClient;
+
+    // Create a single shared client (reused across requests when possible).
+    mqttClient = mqtt.connect(MQTT_BROKER_URL, {
+        username: MQTT_USERNAME,
+        password: MQTT_PASSWORD,
+        protocolVersion: 4,
+        keepalive: 30,
+        reconnectPeriod: 2000,
+        connectTimeout: 10_000,
+        // Ensure proper TLS verification (Node uses system CAs by default).
+        rejectUnauthorized: true,
+    });
+
+    mqttClient.on('connect', () => {
+        console.log('[MQTT] Connected');
+    });
+    mqttClient.on('reconnect', () => {
+        console.log('[MQTT] Reconnecting...');
+    });
+    mqttClient.on('error', (err) => {
+        console.error('[MQTT] Error:', err?.message || err);
+    });
+    mqttClient.on('close', () => {
+        console.log('[MQTT] Closed');
+    });
+
+    return mqttClient;
+}
+
+function waitForMqttConnected(client) {
+    if (!client) return Promise.resolve(false);
+    if (client.connected) return Promise.resolve(true);
+
+    if (!mqttConnectPromise) {
+        mqttConnectPromise = new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                cleanup();
+                resolve(false);
+            }, 10_000);
+
+            const onConnect = () => {
+                cleanup();
+                resolve(true);
+            };
+
+            const onError = () => {
+                cleanup();
+                resolve(false);
+            };
+
+            function cleanup() {
+                clearTimeout(timeout);
+                client.off('connect', onConnect);
+                client.off('error', onError);
+                mqttConnectPromise = null;
+            }
+
+            client.on('connect', onConnect);
+            client.on('error', onError);
+        });
+    }
+
+    return mqttConnectPromise;
+}
+
+async function publishMqttCommand(command, meta = {}) {
+    const client = getMqttClient();
+    if (!client) return false;
+
+    const ok = await waitForMqttConnected(client);
+    if (!ok) return false;
+
+    const payload = JSON.stringify({
+        command,
+        ts: new Date().toISOString(),
+        ...meta
+    });
+
+    return new Promise((resolve) => {
+        client.publish(MQTT_TOPIC, payload, { qos: 0, retain: false }, (err) => {
+            if (err) {
+                console.error('[MQTT] Publish failed:', err?.message || err);
+                return resolve(false);
+            }
+            console.log(`[MQTT] Published ${command} to ${MQTT_TOPIC}`);
+            resolve(true);
+        });
+    });
+}
 
 // In-memory timers (only reliable for long-running servers; not for Vercel serverless)
 const rideTimers = new Map(); // rideId -> { activateTimeout, endTimeout }
@@ -129,6 +241,9 @@ async function activateRideNow(rideId) {
             ride.status = 'active';
             await ride.save();
             console.log(`[RIDE] Activated (unlock) rideId=${rideId}`);
+
+            // Notify devices/dashboard via MQTT
+            publishMqttCommand('UNLOCK', { rideId: String(rideId), reason: 'scheduled_activation' }).catch(() => {});
         }
     } catch (err) {
         console.error('[RIDE] Activation timer failed:', err);
@@ -145,6 +260,9 @@ async function endRideNow(rideId) {
             ride.status = 'ended';
             await ride.save();
             console.log(`[RIDE] Ended (auto) rideId=${rideId}`);
+
+            // Notify devices/dashboard via MQTT
+            publishMqttCommand('LOCK', { rideId: String(rideId), reason: 'auto_end' }).catch(() => {});
         }
     } catch (err) {
         console.error('[RIDE] End timer failed:', err);
@@ -310,6 +428,17 @@ async function processPaymentAndStartRide(payload) {
         amount
     });
 
+    // Notify devices/dashboard via MQTT.
+    // - If ride is active now: unlock.
+    // - If ride is scheduled for future: keep lock.
+    publishMqttCommand(isFuture ? 'LOCK' : 'UNLOCK', {
+        rideId: String(created._id),
+        reason: isFuture ? 'scheduled_booking' : 'payment_unlock',
+        startTime: startTimestamp.toISOString(),
+        endTime: endTime.toISOString(),
+        amount
+    }).catch(() => {});
+
     // For long-running servers, schedule activation/end to be as precise as possible.
     scheduleRideTimersFor(created);
 
@@ -331,15 +460,39 @@ async function processPaymentAndStartRide(payload) {
 async function reconcileRides() {
     const now = new Date();
 
-    await Ride.updateMany(
+    // scheduled -> active (unlock)
+    const toActivate = await Ride.find(
         { status: 'scheduled', start_time: { $lte: now }, end_time: { $gt: now } },
-        { status: 'active' }
-    );
+        { _id: 1 }
+    ).limit(50);
 
-    await Ride.updateMany(
+    if (toActivate.length) {
+        await Ride.updateMany(
+            { _id: { $in: toActivate.map((r) => r._id) }, status: 'scheduled' },
+            { status: 'active' }
+        );
+
+        toActivate.forEach((r) => {
+            publishMqttCommand('UNLOCK', { rideId: String(r._id), reason: 'reconcile_activation' }).catch(() => {});
+        });
+    }
+
+    // active -> ended (lock)
+    const toEnd = await Ride.find(
         { status: 'active', end_time: { $lte: now } },
-        { status: 'ended' }
-    );
+        { _id: 1 }
+    ).limit(50);
+
+    if (toEnd.length) {
+        await Ride.updateMany(
+            { _id: { $in: toEnd.map((r) => r._id) }, status: 'active' },
+            { status: 'ended' }
+        );
+
+        toEnd.forEach((r) => {
+            publishMqttCommand('LOCK', { rideId: String(r._id), reason: 'reconcile_end' }).catch(() => {});
+        });
+    }
 }
 
 async function getStatusPayload(userId) {
@@ -531,6 +684,9 @@ app.post(['/api/end-ride', '/end-ride'], authMiddleware, async (req, res) => {
 
         console.log('Ride ended manually by user.');
         if (updated?._id) clearRideTimers(updated._id);
+
+        // Notify devices/dashboard via MQTT
+        publishMqttCommand('LOCK', { rideId: String(updated._id), reason: 'manual_end' }).catch(() => {});
         res.json({ success: true, message: 'Ride ended successfully' });
     } catch (error) {
         console.error('End-ride error:', error);
@@ -555,6 +711,9 @@ app.post(['/api/cancel-booking', '/cancel-booking'], authMiddleware, async (req,
         await scheduled.save();
 
     clearRideTimers(scheduled._id);
+
+        // Notify devices/dashboard via MQTT
+        publishMqttCommand('LOCK', { rideId: String(scheduled._id), reason: 'cancel_booking' }).catch(() => {});
 
         res.json({ success: true, message: 'Scheduled booking canceled' });
     } catch (error) {
