@@ -13,6 +13,7 @@ const connectDB = require('./db');
 const Ride = require('./models/Ride');
 const User = require('./models/User');
 const authMiddleware = require('./authMiddleware');
+const { normalizePhoneNumberE164, sendRideBookingConfirmationSms } = require('./sms');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -316,6 +317,10 @@ async function processPaymentAndStartRide(payload) {
         userId
     } = payload || {};
 
+    if (!userId) {
+        return { httpStatus: 400, body: { success: false, message: 'Missing userId' } };
+    }
+
     let expectedAmountInINR = 0;
     let totalMinutesRaw = 0;
 
@@ -427,6 +432,32 @@ async function processPaymentAndStartRide(payload) {
         end_time: endTime,
         amount
     });
+
+    // Best-effort SMS (never blocks booking success)
+    (async () => {
+        try {
+            const user = await User.findById(userId, { phoneNumber: 1 });
+            const to = user?.phoneNumber;
+            if (!to) return;
+
+            const smsResult = await sendRideBookingConfirmationSms({
+                to,
+                startUtc: startTimestamp,
+                endUtc: endTime,
+                tzOffsetMinutes
+            });
+
+            if (smsResult?.ok) {
+                console.log(`[SMS] Booking confirmation sent (sid=${smsResult.sid})`);
+            } else if (smsResult?.skipped) {
+                console.log(`[SMS] Skipped booking confirmation: ${smsResult.reason}`);
+            } else {
+                console.warn('[SMS] Failed to send booking confirmation');
+            }
+        } catch (err) {
+            console.error('[SMS] Booking confirmation error:', err?.message || err);
+        }
+    })();
 
     // Notify devices/dashboard via MQTT.
     // - If ride is active now: unlock.
@@ -571,17 +602,31 @@ app.use('/api', async (req, res, next) => {
 
 app.post(['/api/register', '/register'], async (req, res) => {
     try {
-        const { username, email, password } = req.body || {};
+        const { username, email, password, phoneNumber } = req.body || {};
         if (!username || !email || !password) {
             return res.status(400).json({ success: false, message: 'All fields are required' });
         }
+
+        if (phoneNumber) {
+            const normalized = normalizePhoneNumberE164(phoneNumber);
+            if (!normalized) {
+                return res.status(400).json({ success: false, message: 'Invalid phoneNumber. Use E.164 format, e.g. +919876543210' });
+            }
+        }
+
         const existing = await User.findOne({ $or: [{ username }, { email }] });
         if (existing) {
             return res.status(400).json({ success: false, message: 'Username or email already exists' });
         }
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
-        const user = await User.create({ username, email, password: hashedPassword });
+
+        const user = await User.create({
+            username,
+            email,
+            password: hashedPassword,
+            phoneNumber: phoneNumber ? normalizePhoneNumberE164(phoneNumber) : null
+        });
         const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
         res.json({ success: true, token, username: user.username });
     } catch (error) {
@@ -611,7 +656,38 @@ app.post(['/api/login', '/login'], async (req, res) => {
 });
 
 app.get('/api/profile', authMiddleware, (req, res) => {
-    res.json({ success: true, user: { username: req.user.username, email: req.user.email } });
+    res.json({
+        success: true,
+        user: {
+            username: req.user.username,
+            email: req.user.email,
+            phoneNumber: req.user.phoneNumber || null
+        }
+    });
+});
+
+app.put('/api/profile', authMiddleware, async (req, res) => {
+    try {
+        const { phoneNumber } = req.body || {};
+
+        if (!phoneNumber) {
+            req.user.phoneNumber = null;
+            await req.user.save();
+            return res.json({ success: true, user: { phoneNumber: null } });
+        }
+
+        const normalized = normalizePhoneNumberE164(phoneNumber);
+        if (!normalized) {
+            return res.status(400).json({ success: false, message: 'Invalid phoneNumber. Use E.164 format, e.g. +919876543210' });
+        }
+
+        req.user.phoneNumber = normalized;
+        await req.user.save();
+        res.json({ success: true, user: { phoneNumber: normalized } });
+    } catch (error) {
+        console.error('Profile update error:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
 app.get(['/api/version'], (req, res) => {

@@ -55,6 +55,27 @@ Notes:
 
 - If you deploy to Vercel, `MONGODB_URI` must point to a hosted MongoDB instance (e.g. MongoDB Atlas). A `mongodb://localhost:27017/...` or `mongodb://127.0.0.1:27017/...` URI will fail in Vercel.
 
+### SMS booking confirmation (optional)
+
+This project can send an SMS after a ride is successfully booked.
+
+1) Install dependency:
+
+```bash
+npm install twilio
+```
+
+2) Set these env vars:
+
+- `SMS_ENABLED=true`
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_FROM_NUMBER` (E.164, e.g. `+14155552671`)
+
+3) Ensure the user has a phone number stored in **E.164** format (e.g. `+919876543210`).
+  - During signup, the UI includes an optional phone number field.
+  - You can also update it via `PUT /api/profile` with `{ "phoneNumber": "+..." }`.
+
 ### 3) Run
 
 ```bash
