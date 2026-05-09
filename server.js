@@ -21,10 +21,9 @@ const IS_VERCEL = Boolean(process.env.VERCEL);
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-for-development';
 
 // --- MQTT (HiveMQ Cloud) ---
-// Configure via env vars (do not hardcode secrets):
-// - MQTT_BROKER_URL=mqtts://<host>:8883
-// - MQTT_USERNAME=...
-// - MQTT_PASSWORD=...
+// - MQTT_BROKER_URL
+// - MQTT_USERNAME
+// - MQTT_PASSWORD
 // - MQTT_TOPIC=esp32/test
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || '';
 const MQTT_USERNAME = process.env.MQTT_USERNAME || '';
@@ -41,8 +40,6 @@ function isMqttConfigured() {
 function getMqttClient() {
     if (!isMqttConfigured()) return null;
     if (mqttClient) return mqttClient;
-
-    // Create a single shared client (reused across requests when possible).
     mqttClient = mqtt.connect(MQTT_BROKER_URL, {
         username: MQTT_USERNAME,
         password: MQTT_PASSWORD,
@@ -50,7 +47,6 @@ function getMqttClient() {
         keepalive: 30,
         reconnectPeriod: 2000,
         connectTimeout: 10_000,
-        // Ensure proper TLS verification (Node uses system CAs by default).
         rejectUnauthorized: true,
     });
 
@@ -131,10 +127,9 @@ async function publishMqttCommand(command, meta = {}) {
     });
 }
 
-// In-memory timers (only reliable for long-running servers; not for Vercel serverless)
-const rideTimers = new Map(); // rideId -> { activateTimeout, endTimeout }
+const rideTimers = new Map(); 
 
-// Connect to MongoDB (eager connect only for local dev).
+// Connect to MongoDB 
 if (!IS_VERCEL) {
     connectDB().catch((err) => {
         console.error('MongoDB connection failed:', err);
@@ -279,7 +274,6 @@ function scheduleRideTimersFor(ride) {
     const now = Date.now();
     const startMs = new Date(ride.start_time).getTime() - now;
     const endMs = new Date(ride.end_time).getTime() - now;
-
     const timers = { activateTimeout: null, endTimeout: null };
 
     if (startMs > 0 && ride.status === 'scheduled') {
@@ -290,7 +284,6 @@ function scheduleRideTimersFor(ride) {
             });
         }, startMs);
     }
-
     if (endMs > 0 && (ride.status === 'active' || ride.status === 'scheduled')) {
         timers.endTimeout = setTimeout(() => {
             endRideNow(rideId).finally(() => {
@@ -299,7 +292,6 @@ function scheduleRideTimersFor(ride) {
             });
         }, endMs);
     }
-
     rideTimers.set(rideId, timers);
 }
 
@@ -343,7 +335,6 @@ async function processPaymentAndStartRide(payload) {
         return { httpStatus: 400, body: { success: false, message: "Booking date is required" } };
     }
 
-    // bookingStartTime is preferred (client-computed ISO to avoid server timezone differences)
     const normalizedBookingStartTime = (typeof bookingStartTime === 'string') ? bookingStartTime.trim() : bookingStartTime;
     if (!normalizedBookingStartTime && !bookingTime) {
         return { httpStatus: 400, body: { success: false, message: "Booking time is required" } };
@@ -384,7 +375,6 @@ async function processPaymentAndStartRide(payload) {
         return { httpStatus: 400, body: { success: false, message: 'Invalid booking time' } };
     }
 
-    // Allow a small grace window for "now" bookings (time input has no seconds)
     const now = new Date();
     const graceMs = 2 * 60 * 1000;
     if (startTimestamp.getTime() < (now.getTime() - graceMs)) {
@@ -395,9 +385,7 @@ async function processPaymentAndStartRide(payload) {
         startTimestamp = now;
     }
 
-    // Extra guard: enforce "within today + next 5 days" as a simple future-window.
-    // This avoids timezone-dependent edge cases on serverless (UTC) while still preventing far-future bookings.
-    const maxFutureMs = 6 * 24 * 60 * 60 * 1000; // ~6 days window (inclusive date rule)
+    const maxFutureMs = 6 * 24 * 60 * 60 * 1000; 
     if (startTimestamp.getTime() - now.getTime() > maxFutureMs) {
         return { httpStatus: 400, body: { success: false, message: 'Booking date must be within today and the next 5 days' } };
     }
@@ -433,7 +421,7 @@ async function processPaymentAndStartRide(payload) {
         amount
     });
 
-    // Best-effort SMS (never blocks booking success)
+    // SMS
     (async () => {
         try {
             const user = await User.findById(userId, { phoneNumber: 1 });
@@ -469,8 +457,6 @@ async function processPaymentAndStartRide(payload) {
         endTime: endTime.toISOString(),
         amount
     }).catch(() => {});
-
-    // For long-running servers, schedule activation/end to be as precise as possible.
     scheduleRideTimersFor(created);
 
     return {
@@ -951,7 +937,6 @@ if (IS_VERCEL) {
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`Server is running on port: ${PORT}`);
 
-        // Best-effort: schedule timers for any upcoming rides (local/long-running server only)
         (async () => {
             if (IS_VERCEL) return;
             try {

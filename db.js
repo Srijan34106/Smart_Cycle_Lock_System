@@ -6,19 +6,15 @@ function hasLocalhostMongoHost(uri) {
     if (!uri || typeof uri !== 'string') return false;
     const trimmed = uri.trim();
     if (!/^mongodb(\+srv)?:\/\//i.test(trimmed)) return false;
-
-    // Strip scheme.
     const afterScheme = trimmed.replace(/^mongodb(\+srv)?:\/\//i, '');
-    // Take authority section up to first '/', '?' or '#'.
     const authority = afterScheme.split(/[/?#]/, 1)[0] || '';
-    // Drop credentials if present.
     const hostList = authority.includes('@') ? authority.split('@').pop() : authority;
 
     const hosts = hostList
         .split(',')
         .map((h) => (h || '').trim())
         .filter(Boolean)
-        .map((h) => h.replace(/^\[(.*)\]$/, '$1')) // strip IPv6 brackets
+        .map((h) => h.replace(/^\[(.*)\]$/, '$1')) 
         .map((h) => h.split(':', 1)[0].toLowerCase());
 
     return hosts.some((h) => h === 'localhost' || h === '127.0.0.1' || h === '::1');

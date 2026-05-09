@@ -126,8 +126,6 @@ async function initDashboard() {
             let newState = 'LOCKED';
             if (isScheduled) newState = 'SCHEDULED';
             else if (!data.isLocked) newState = 'UNLOCKED';
-
-            // Only update DOM structure if state changed
             if (currentUiState !== newState) {
                 currentUiState = newState;
 
@@ -204,7 +202,6 @@ async function initDashboard() {
             </div>
         `).join('');
 
-        // Prevent unnecessary DOM churning which dismisses browser dialogs
         if (historyList.innerHTML !== newHtml) {
             historyList.innerHTML = newHtml;
         }
@@ -339,7 +336,6 @@ async function initDashboard() {
             return;
         }
 
-        // Validation check (double check frontend)
         const dateObj = new Date(selectedDate);
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -380,7 +376,7 @@ async function initDashboard() {
             return;
         }
 
-        // Validate time not in the past (allow 2 min grace for "now")
+        // Validate time not in the past 
         const [hStr, mStr] = String(timeVal).split(':');
         const h = parseInt(hStr, 10);
         const m = parseInt(mStr, 10);
@@ -433,10 +429,10 @@ async function initDashboard() {
 
         const totalMins = (h * 60) + m;
 
-        // Pricing Logic: ₹100 per 30 mins or part thereof
+        // Pricing Logic: ₹100 per 30 mins
         let amount = Math.ceil(totalMins / 30) * 100;
         if (amount === 0 && totalMins > 0) amount = 100;
-        if (totalMins === 0) amount = 0; // Display 0 if invalid
+        if (totalMins === 0) amount = 0; 
 
         costDisplay.innerText = `₹${amount}`;
     }
@@ -459,7 +455,6 @@ async function initDashboard() {
             return;
         }
 
-        // Build an exact start timestamp (client local), then send as ISO.
         const [timeHStr, timeMStr] = String(timeVal).split(':');
         const timeH = parseInt(timeHStr, 10);
         const timeM = parseInt(timeMStr, 10);
@@ -509,8 +504,6 @@ async function initDashboard() {
                 "name": "Urbanspin",
                 "description": "Bicycle Rental",
                 "order_id": orderData.orderId,
-                // Use redirect callback flow (more reliable across payment methods).
-                // Backend verifies payment, publishes MQTT UNLOCK, then redirects back to dashboard.
                 "callback_url": `${window.location.origin}${API_URL}/razorpay/callback`,
                 "redirect": true,
                 "prefill": {
@@ -532,8 +525,6 @@ async function initDashboard() {
 
             rzp.open();
 
-            // Note: on success, Razorpay will redirect via callback_url.
-            // Reset button state so the UI doesn't look stuck if user cancels.
             payBtn.innerText = "Pay & Unlock";
             payBtn.disabled = false;
 
@@ -546,7 +537,6 @@ async function initDashboard() {
     });
 }
 
-// One-time dashboard alerts after Razorpay callback redirect
 try {
     const url = new URL(window.location.href);
     const paymentFlag = url.searchParams.get('payment');

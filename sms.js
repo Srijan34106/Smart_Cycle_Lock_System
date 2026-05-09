@@ -1,8 +1,5 @@
 let twilio = null;
 try {
-    // Optional dependency until installed.
-    // If not present, SMS will be skipped with a clear reason.
-    // eslint-disable-next-line global-require
     twilio = require('twilio');
 } catch (err) {
     twilio = null;
@@ -32,11 +29,7 @@ function normalizePhoneNumberE164(raw) {
     if (!raw || typeof raw !== 'string') return null;
     const trimmed = raw.trim();
     if (!trimmed) return null;
-
-    // Allow common formatting characters, keep leading '+' if present.
     const cleaned = trimmed.replace(/[()\-\s]/g, '');
-
-    // Must be E.164 (+ and digits), or digits-only (will be rejected).
     if (/^\+[1-9]\d{6,14}$/.test(cleaned)) return cleaned;
 
     return null;
